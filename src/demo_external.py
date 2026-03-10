@@ -16,12 +16,9 @@ def run_reciprocation_demo(
     """Reciprocation movement with some commands."""
     dmhctr = DMHCommander(ip, sockport)
     time.sleep(1)
-    if speed == 'low':
-        sleep_sec = 30
-    elif speed == 'middle':
-        sleep_sec = 15
-    elif speed == 'high':
-        sleep_sec = 10
+    sleep_sec = {'low': 30, 'middle': 15, 'high': 10}.get(speed)
+    if sleep_sec is None:
+        raise ValueError("Unknown speed: %s. Use low/middle/high." % speed)
 
     for i in range(num_repeat):
         dmhctr.sendcommand(direction1[0] + speed[0])

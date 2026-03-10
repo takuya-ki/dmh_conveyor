@@ -19,12 +19,11 @@ def run_reciprocation_demo(
               str(dmh.get_set_parameters(4)))
         print("Low speed [Hz/100]: " +
               str(dmh.get_set_parameters(5)))
-        if speed == 'low':
-            sleep_sec = 30
-        elif speed == 'middle':
-            sleep_sec = 15
-        elif speed == 'high':
-            sleep_sec = 10
+        sleep_sec = {'low': 30, 'middle': 15, 'high': 10}.get(speed)
+        if sleep_sec is None:
+            print("Unknown speed: %s. Use low/middle/high." % speed)
+            dmh.close_connection()
+            return
 
         for i in range(num_repeat):
             dmh.move(direction1, speed)

@@ -4,6 +4,9 @@ import time
 import socket
 
 
+MAX_CONNECT_RETRIES = 30  # Maximum connection attempts (~30 seconds)
+
+
 class DMHCommander(object):
 
     def __init__(self, hostip, sockport):
@@ -14,15 +17,18 @@ class DMHCommander(object):
         self.opening()
 
     def opening(self):
-        while True:
-            print("Waiting for server to start up...")
+        for attempt in range(MAX_CONNECT_RETRIES):
+            print("Waiting for server to start up... (%d/%d)" % (
+                attempt + 1, MAX_CONNECT_RETRIES))
             try:
                 self.dmhctr = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.dmhctr.connect((self.hostip, self.port))
-                break
-            except socket.error as e:
-                print("Failed to connect, try reconnect.")
+                return
+            except socket.error:
                 time.sleep(1.0)
+        raise ConnectionError(
+            "Could not connect to %s:%d after %d attempts." % (
+                self.hostip, self.port, MAX_CONNECT_RETRIES))
 
     def closing(self):
         # finalizing the position
@@ -32,7 +38,7 @@ class DMHCommander(object):
         except socket.error as e:
             print("Closing error for the dmhctr instance.")
 
-        print("Ended the demostoration successfully!")
+        print("Ended the demonstration successfully!")
 
     def sendcommand(self, keystr):
         if self.dmhctr is not None:

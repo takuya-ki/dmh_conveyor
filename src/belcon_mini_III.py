@@ -2,9 +2,52 @@
 
 import time
 
-import serial
 from serial.tools import list_ports
 from pymodbus.client.sync import ModbusSerialClient as ModbusClient
+
+
+# --- Modbus Register Addresses ---
+REG_STATUS          = 8    # R: Device status (16-bit flags)
+REG_SET_MODE        = 9    # R/W: Operation mode
+REG_FREQ_RAM        = 13   # R/W: Target frequency (RAM)
+REG_FREQ_EEPROM     = 14   # W: Target frequency (EEPROM)
+REG_ACTUAL_FREQ     = 200  # R: Realtime output frequency
+REG_SET_FREQ        = 204  # R: Set frequency
+REG_PARAM_BASE      = 1000 # R: Parameter base address (param N -> 1000+N)
+
+# --- Operation Mode Values (REG_SET_MODE) ---
+MODE_EXT     = 0
+MODE_PU      = 1
+MODE_EXT_JOG = 2
+MODE_NET     = 4
+MODE_PU_EXT  = 5
+MODE_NET_SET = 6  # Written to activate NET mode
+
+MODE_LABELS = {
+    MODE_EXT:     "EXT",
+    MODE_PU:      "PU",
+    MODE_EXT_JOG: "EXT JOG",
+    MODE_NET:     "NET",
+    MODE_PU_EXT:  "PU+ EXT",
+}
+
+# --- Direction / Speed Control Values (REG_STATUS write) ---
+DIR_NORMAL  = 2   # Normal rotation flag
+DIR_REVERSE = 4   # Reverse rotation flag
+
+SPEED_LOW    = 32
+SPEED_MIDDLE = 16
+SPEED_HIGH   = 8
+
+SPEED_LABELS = {
+    'low':    SPEED_LOW,
+    'middle': SPEED_MIDDLE,
+    'high':   SPEED_HIGH,
+}
+
+# --- Slave / Modbus Config ---
+UNIT_ID   = 1
+MAX_FREQ_HZ = 40000
 
 
 class DMH():
@@ -21,7 +64,7 @@ class DMH():
             baudrate=19200,
             timeout=3,
             strict=False)
-        self._max_freq_hz = 40000
+        self._max_freq_hz = MAX_FREQ_HZ
         self.open_connection()
 
     def open_connection(self):
@@ -33,24 +76,22 @@ class DMH():
         self.client.close()
 
     def select_port(self):
-        """Selects a port."""
+        """Selects a port interactively if multiple ports are available."""
         ports = list_ports.comports()
         devices = [info.device for info in ports]
 
         if len(devices) == 0:
-            print("Error: any devices not found")
+            print("Error: no devices found")
             return None
         elif len(devices) == 1:
-            print("%s is only found" % devices[0])
-            selected_port = devices[0]
+            print("%s is the only port found." % devices[0])
+            return devices[0]
         else:
-            for i in range(len(devices)):
-                print("input %3d: open %s" % (i, devices[i]))
+            for i, dev in enumerate(devices):
+                print("input %3d: open %s" % (i, dev))
             print("input number of target port >> ", end="")
             num = int(input())
-            selected_port = devices[num]
-
-        return selected_port
+            return devices[num]
 
     def get_status(self):
         """Reads current device status.
@@ -70,11 +111,8 @@ class DMH():
         10 - 14: reserved              Not used. Always 0.
         15:      Abnormal occurrence   1 when an abnormal state is detected.
         """
-        # address   : register number
-        # count     : number of registers to be read
-        # unit      : slave device address
         result = self.client.read_holding_registers(
-            address=8, count=1, unit=1)
+            address=REG_STATUS, count=1, unit=UNIT_ID)
         status = format(result.registers[0], '016b')
         status_list = [0] * 16
         if int(status[-1]):
@@ -115,66 +153,45 @@ class DMH():
         4: NET
         5: PU+ EXT
         """
-        # address   : register number
-        # count     : number of registers to be read
-        # unit      : slave device address
         result = self.client.read_holding_registers(
-            address=9, count=1, unit=1)
+            address=REG_SET_MODE, count=1, unit=UNIT_ID)
         mode_label = result.registers[0]
-        if int(mode_label) == 0:
-            model_str = "EXT"
-        elif int(mode_label) == 1:
-            model_str = "PU"
-        elif int(mode_label) == 2:
-            model_str = "EXT JOG"
-        elif int(mode_label) == 4:
-            model_str = "NET"
-        elif int(mode_label) == 5:
-            model_str = "PU+ EXT"
-        print("Current set mode: " + model_str)
+        mode_str = MODE_LABELS.get(int(mode_label), "UNKNOWN(%d)" % mode_label)
+        print("Current set mode: " + mode_str)
 
         return mode_label
 
     def get_set_parameters(self, pnum):
         """Reads parameters set on the inverter controller.
-        Parameter number + 41000 = register number.
+        Register address = REG_PARAM_BASE + pnum.
+        Note: pnum is 0-indexed offset from REG_PARAM_BASE, not the Pr. number.
         """
-        # address   : register number
-        # count     : number of registers to be read
-        # unit      : slave device address
         result = self.client.read_holding_registers(
-            address=1000+pnum, count=1, unit=1)
-        param_value = result.registers[0]
-
-        return param_value
+            address=REG_PARAM_BASE + pnum, count=1, unit=UNIT_ID)
+        return result.registers[0]
 
     def stop(self):
         """Stops operations."""
-        # address   : register number
-        # values    : data to be written
-        # unit      : slave adress
-        request = self.client.write_registers(
-            address=8, values=[0], unit=1)
+        self.client.write_registers(
+            address=REG_STATUS, values=[0], unit=UNIT_ID)
 
     def move(self, direction='normal', speed='low'):
-        """Executes normal/reverse rotations with target speed."""
-        # address   : register number
-        # values    : data to be written
-        # unit      : slave adress
+        """Executes normal/reverse rotations with target speed.
 
+        Args:
+            direction: 'normal' or 'reverse'
+            speed: 'low', 'middle', 'high', or an integer frequency in Hz/100
+        """
         if direction == 'normal':
-            set_value = 2
+            set_value = DIR_NORMAL
         elif direction == 'reverse':
-            set_value = 4
+            set_value = DIR_REVERSE
         else:
             print("Select one from normal or reverse for direction.")
+            return
 
-        if speed == 'low':
-            speed_val = 32
-        elif speed == 'middle':
-            speed_val = 16
-        elif speed == 'high':
-            speed_val = 8
+        if speed in SPEED_LABELS:
+            speed_val = SPEED_LABELS[speed]
         else:
             speed_val = 0
             try:
@@ -182,59 +199,55 @@ class DMH():
                     min(self._max_freq_hz, int(speed)))
             except ValueError:
                 print("Select low/middle/high or input frequency.")
-                pass
+                return
 
-        request = self.client.write_registers(
-            address=8, values=[set_value+speed_val], unit=1)
+        self.client.write_registers(
+            address=REG_STATUS, values=[set_value + speed_val], unit=UNIT_ID)
 
     def set_net_mode(self):
         """Sets inverter operation mode as NET mode."""
-        request = self.client.write_registers(
-            address=9, values=[6], unit=1)
+        self.client.write_registers(
+            address=REG_SET_MODE, values=[MODE_NET_SET], unit=UNIT_ID)
 
     def get_actual_frequency(self):
-        """Gets realtime frequency."""
+        """Gets realtime output frequency [Hz/100]."""
         result = self.client.read_holding_registers(
-            address=200, count=1, unit=1)
-        freq_value = result.registers[0]
-
-        return freq_value
+            address=REG_ACTUAL_FREQ, count=1, unit=UNIT_ID)
+        return result.registers[0]
 
     def get_set_frequency(self):
-        """Gets set frequency."""
+        """Gets set frequency [Hz/100]."""
         result = self.client.read_holding_registers(
-            address=204, count=1, unit=1)
-        freq_value = result.registers[0]
-
-        return freq_value
+            address=REG_SET_FREQ, count=1, unit=UNIT_ID)
+        return result.registers[0]
 
     def get_frequency_from_RAM(self):
-        """Gets target frequency on RAM."""
+        """Gets target frequency from RAM [Hz/100]."""
         result = self.client.read_holding_registers(
-            address=13, count=1, unit=1)
-        freq_value = result.registers[0]
-
-        return freq_value
+            address=REG_FREQ_RAM, count=1, unit=UNIT_ID)
+        return result.registers[0]
 
     def set_frequency_on_RAM(self, freq):
-        """Sets target frequency on RAM."""
-        request = self.client.write_registers(
-            address=13, values=[freq], unit=1)
+        """Sets target frequency on RAM [Hz/100]."""
+        self.client.write_registers(
+            address=REG_FREQ_RAM, values=[freq], unit=UNIT_ID)
 
-    def set_frequency_on_EEPROM(self):
-        """Sets target frequency on EEPROM."""
-        request = self.client.write_registers(
-            address=14, values=[freq], unit=1)
+    def set_frequency_on_EEPROM(self, freq):
+        """Sets target frequency on EEPROM [Hz/100].
+
+        Note: Writes to EEPROM are persistent but have limited write cycles.
+        Prefer set_frequency_on_RAM() for frequent updates.
+        """
+        self.client.write_registers(
+            address=REG_FREQ_EEPROM, values=[freq], unit=UNIT_ID)
 
     def sleep_with_displaying_freq(self, sleep_sec):
-        """Sleeps and displays frequency currently set."""
+        """Sleeps for sleep_sec seconds while displaying current frequency."""
         start = time.time()
         while True:
             time.sleep(0.1)
-            print("Frequency: " +
-                  str(self.get_actual_frequency()) +
-                  " / " +
-                  str(self.get_set_frequency()) +
-                  " [Hz/100]")
+            print("Frequency: %s / %s [Hz/100]" % (
+                self.get_actual_frequency(),
+                self.get_set_frequency()))
             if (time.time() - start) > sleep_sec:
                 break

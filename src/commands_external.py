@@ -22,9 +22,9 @@ def commands_to_host(ip, sockport):
                     \nstop: stop the motion \
                     \ncomplete: finish program \
                     \n-->")
-        dmhctr.sendcommand(key)
         if key == 'complete':
             break
+        dmhctr.sendcommand(key)
         time.sleep(0.1)
 
     dmhctr.closing()

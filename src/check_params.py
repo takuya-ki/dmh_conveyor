@@ -14,6 +14,7 @@ def check_params(usbport, params):
         dmh.get_set_mode()
 
         for p in params:
+            # Pr. N corresponds to register REG_PARAM_BASE + (N-1), hence p-1.
             print("Pr. "+str(p)+": "+str(dmh.get_set_parameters(p-1)))
 
     dmh.close_connection()
