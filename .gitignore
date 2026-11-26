@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+CATKIN_IGNORE
+.claude
+CLAUDE.md
